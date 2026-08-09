@@ -6,25 +6,67 @@ echo " Analytics as a Service for Data Sharing Partners "
 echo " Lab ID: GSP1042 "
 echo "========================================================"
 
-AUTO_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
-AUTO_ACCOUNT=$(gcloud config get-value account 2>/dev/null || echo "")
+echo "Auto-detecting project credentials and accounts..."
 
-echo "Auto-detected Active Project: ${AUTO_PROJECT:-Not found}"
-echo "Auto-detected Active Account: ${AUTO_ACCOUNT:-Not found}"
-echo "--------------------------------------------------------"
+eval $(python3 -c "
+import subprocess, json
 
-if [ -n "$AUTO_PROJECT" ]; then
-    PARTNER_PROJECT="$AUTO_PROJECT"
-else
+def run(cmd):
+    try:
+        return subprocess.check_output(cmd, shell=True, text=True).strip()
+    except Exception:
+        return ''
+
+partner = run('gcloud config get-value project 2>/dev/null')
+
+projs_raw = run('gcloud projects list --format=\"value(projectId)\"')
+projs = [p.strip() for p in projs_raw.splitlines() if p.strip()]
+
+cust_a_proj = ''
+cust_b_proj = ''
+
+for p in projs:
+    if p != partner:
+        if not cust_a_proj:
+            cust_a_proj = p
+        elif not cust_b_proj:
+            cust_b_proj = p
+
+def get_user(proj):
+    if not proj:
+        return ''
+    raw = run(f'gcloud projects get-iam-policy {proj} --format=json 2>/dev/null')
+    if not raw:
+        return ''
+    try:
+        policy = json.loads(raw)
+        for b in policy.get('bindings', []):
+            if b.get('role') in ['roles/owner', 'roles/editor']:
+                for m in b.get('members', []):
+                    if m.startswith('user:'):
+                        return m.replace('user:', '')
+    except Exception:
+        pass
+    return ''
+
+cust_a_user = get_user(cust_a_proj)
+cust_b_user = get_user(cust_b_proj)
+
+print(f'AUTO_PARTNER=\"{partner}\"')
+print(f'AUTO_A_PROJ=\"{cust_a_proj}\"')
+print(f'AUTO_B_PROJ=\"{cust_b_proj}\"')
+print(f'AUTO_A_USER=\"{cust_a_user}\"')
+print(f'AUTO_B_USER=\"{cust_b_user}\"')
+")
+
+PARTNER_PROJECT="${PARTNER_PROJECT:-$AUTO_PARTNER}"
+CUSTOMER_A_PROJECT="${CUSTOMER_A_PROJECT:-$AUTO_A_PROJ}"
+CUSTOMER_B_PROJECT="${CUSTOMER_B_PROJECT:-$AUTO_B_PROJ}"
+CUSTOMER_A_USER="${CUSTOMER_A_USER:-$AUTO_A_USER}"
+CUSTOMER_B_USER="${CUSTOMER_B_USER:-$AUTO_B_USER}"
+
+if [ -z "$PARTNER_PROJECT" ]; then
     read -p "Enter Data Sharing Partner Project ID: " PARTNER_PROJECT
-fi
-
-if [ -z "$CUSTOMER_A_USER" ]; then
-    read -p "Enter Customer A Username (email): " CUSTOMER_A_USER
-fi
-
-if [ -z "$CUSTOMER_B_USER" ]; then
-    read -p "Enter Customer B Username (email): " CUSTOMER_B_USER
 fi
 
 if [ -z "$CUSTOMER_A_PROJECT" ]; then
@@ -33,6 +75,14 @@ fi
 
 if [ -z "$CUSTOMER_B_PROJECT" ]; then
     read -p "Enter Customer B Project ID: " CUSTOMER_B_PROJECT
+fi
+
+if [ -z "$CUSTOMER_A_USER" ]; then
+    read -p "Enter Customer A Username (email): " CUSTOMER_A_USER
+fi
+
+if [ -z "$CUSTOMER_B_USER" ]; then
+    read -p "Enter Customer B Username (email): " CUSTOMER_B_USER
 fi
 
 CUSTOMER_A_USER=$(echo "$CUSTOMER_A_USER" | sed 's/^user://' | xargs)
