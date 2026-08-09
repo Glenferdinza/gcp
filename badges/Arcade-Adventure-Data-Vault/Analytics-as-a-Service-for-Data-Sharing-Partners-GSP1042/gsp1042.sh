@@ -9,7 +9,7 @@ echo "========================================================"
 echo "Auto-detecting project credentials and accounts..."
 
 eval $(python3 -c "
-import subprocess, json
+import subprocess, json, re
 
 def run(cmd):
     try:
@@ -22,35 +22,53 @@ partner = run('gcloud config get-value project 2>/dev/null')
 projs_raw = run('gcloud projects list --format=\"value(projectId)\"')
 projs = [p.strip() for p in projs_raw.splitlines() if p.strip()]
 
+hash_match = re.search(r'qwiklabs-gcp-\d+-([a-f0-9]+)', partner)
+if hash_match:
+    h = hash_match.group(1)
+    for idx in ['00', '01', '02', '03']:
+        cand = f'qwiklabs-gcp-{idx}-{h}'
+        if cand not in projs:
+            projs.append(cand)
+
 cust_a_proj = ''
 cust_b_proj = ''
 
 for p in projs:
-    if p != partner:
-        if not cust_a_proj:
-            cust_a_proj = p
-        elif not cust_b_proj:
-            cust_b_proj = p
+    if p == partner:
+        continue
+    ds_list = run(f'bq ls --project_id={p} 2>/dev/null')
+    if 'customer_a_dataset' in ds_list:
+        cust_a_proj = p
+    elif 'customer_b_dataset' in ds_list:
+        cust_b_proj = p
 
-def get_user(proj):
-    if not proj:
-        return ''
-    raw = run(f'gcloud projects get-iam-policy {proj} --format=json 2>/dev/null')
-    if not raw:
-        return ''
-    try:
-        policy = json.loads(raw)
-        for b in policy.get('bindings', []):
-            if b.get('role') in ['roles/owner', 'roles/editor']:
+other_projs = [p for p in projs if p != partner]
+if not cust_a_proj and len(other_projs) >= 1:
+    cust_a_proj = other_projs[0]
+if not cust_b_proj and len(other_projs) >= 2:
+    cust_b_proj = other_projs[1]
+
+cust_a_user = ''
+cust_b_user = ''
+
+all_users = set()
+for p in [partner] + other_projs:
+    iam_raw = run(f'gcloud projects get-iam-policy {p} --format=json 2>/dev/null')
+    if iam_raw:
+        try:
+            pol = json.loads(iam_raw)
+            for b in pol.get('bindings', []):
                 for m in b.get('members', []):
                     if m.startswith('user:'):
-                        return m.replace('user:', '')
-    except Exception:
-        pass
-    return ''
+                        all_users.add(m.replace('user:', ''))
+        except Exception:
+            pass
 
-cust_a_user = get_user(cust_a_proj)
-cust_b_user = get_user(cust_b_proj)
+for u in all_users:
+    if 'student-01' in u:
+        cust_a_user = u
+    elif 'student-02' in u:
+        cust_b_user = u
 
 print(f'AUTO_PARTNER=\"{partner}\"')
 print(f'AUTO_A_PROJ=\"{cust_a_proj}\"')
