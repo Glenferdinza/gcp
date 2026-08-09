@@ -8,8 +8,6 @@ echo "========================================================"
 
 AUTO_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
 AUTO_ACCOUNT=$(gcloud config get-value account 2>/dev/null || echo "")
-AUTO_ZONE=$(gcloud config get-value compute/zone 2>/dev/null || echo "")
-AUTO_REGION=$(gcloud config get-value compute/region 2>/dev/null || echo "")
 
 echo "Auto-detected Active Project: ${AUTO_PROJECT:-Not found}"
 echo "Auto-detected Active Account: ${AUTO_ACCOUNT:-Not found}"
@@ -19,24 +17,6 @@ if [ -n "$AUTO_PROJECT" ]; then
     PARTNER_PROJECT="$AUTO_PROJECT"
 else
     read -p "Enter Data Sharing Partner Project ID: " PARTNER_PROJECT
-fi
-
-if [ -z "$ZONE" ]; then
-    if [ -n "$AUTO_ZONE" ]; then
-        ZONE="$AUTO_ZONE"
-        echo "Using auto-detected Zone: $ZONE"
-    else
-        read -p "Enter Zone (e.g. us-central1-a): " ZONE
-    fi
-fi
-
-if [ -z "$REGION" ]; then
-    if [ -n "$AUTO_REGION" ]; then
-        REGION="$AUTO_REGION"
-        echo "Using auto-detected Region: $REGION"
-    else
-        REGION=$(echo "$ZONE" | sed 's/-[a-z]$//')
-    fi
 fi
 
 if [ -z "$CUSTOMER_A_USER" ]; then
@@ -64,8 +44,6 @@ PARTNER_PROJECT=$(echo "$PARTNER_PROJECT" | xargs)
 echo "--------------------------------------------------------"
 echo "Configuration Summary:"
 echo " Partner Project ID  : $PARTNER_PROJECT"
-echo " Zone                : $ZONE"
-echo " Region              : $REGION"
 echo " Customer A User     : $CUSTOMER_A_USER"
 echo " Customer A Project  : $CUSTOMER_A_PROJECT"
 echo " Customer B User     : $CUSTOMER_B_USER"
@@ -95,7 +73,7 @@ echo "Task 2: Authorizing Views in demo_dataset metadata..."
 bq show --format=prettyjson ${PARTNER_PROJECT}:demo_dataset > dataset_temp.json
 
 python3 -c "
-import json, sys
+import json
 
 partner_proj = '$PARTNER_PROJECT'
 with open('dataset_temp.json', 'r') as f:
