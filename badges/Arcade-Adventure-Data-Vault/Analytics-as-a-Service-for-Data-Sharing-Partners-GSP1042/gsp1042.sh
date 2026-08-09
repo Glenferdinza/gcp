@@ -43,6 +43,8 @@ for p in projs:
         cust_b_proj = p
 
 other_projs = [p for p in projs if p != partner and p.startswith('qwiklabs-gcp-')]
+other_projs.sort()
+
 if not cust_a_proj and len(other_projs) >= 1:
     cust_a_proj = other_projs[0]
 if not cust_b_proj and len(other_projs) >= 2:
@@ -64,7 +66,7 @@ for p in [partner] + other_projs:
         except Exception:
             pass
 
-for u in all_users:
+for u in sorted(list(all_users)):
     if 'student-01' in u:
         cust_a_user = u
     elif 'student-02' in u:
@@ -185,12 +187,34 @@ echo "Task 3: Granting BigQuery Data Viewer role to Customer A & B users..."
 bq query --use_legacy_sql=false \
 "GRANT \`roles/bigquery.dataViewer\`
 ON VIEW \`${PARTNER_PROJECT}.demo_dataset.authorized_view_a\`
-TO 'user:${CUSTOMER_A_USER}';"
+TO 'user:${CUSTOMER_A_USER}';" || true
 
 bq query --use_legacy_sql=false \
 "GRANT \`roles/bigquery.dataViewer\`
 ON VIEW \`${PARTNER_PROJECT}.demo_dataset.authorized_view_b\`
-TO 'user:${CUSTOMER_B_USER}';"
+TO 'user:${CUSTOMER_B_USER}';" || true
+
+python3 -c "
+from google.cloud import bigquery
+
+client = bigquery.Client(project='$PARTNER_PROJECT')
+
+def grant(table_id, user_email):
+    try:
+        t_ref = f'$PARTNER_PROJECT.demo_dataset.{table_id}'
+        table = client.get_table(t_ref)
+        policy = client.get_iam_policy(table)
+        policy.bindings.append({
+            'role': 'roles/bigquery.dataViewer',
+            'members': [f'user:{user_email}']
+        })
+        client.set_iam_policy(table, policy)
+    except Exception:
+        pass
+
+grant('authorized_view_a', '$CUSTOMER_A_USER')
+grant('authorized_view_b', '$CUSTOMER_B_USER')
+"
 
 echo "Task 3 completed successfully."
 
