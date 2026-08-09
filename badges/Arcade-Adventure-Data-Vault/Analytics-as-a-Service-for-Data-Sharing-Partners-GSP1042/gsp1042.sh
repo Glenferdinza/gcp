@@ -6,7 +6,47 @@ echo " Analytics as a Service for Data Sharing Partners "
 echo " Lab ID: GSP1042 "
 echo "========================================================"
 
-echo "Auto-detecting project credentials and accounts..."
+CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
+echo "Current Active Project: $CURRENT_PROJECT"
+echo "--------------------------------------------------------"
+
+DS_LIST=$(bq ls --project_id=$CURRENT_PROJECT 2>/dev/null || echo "")
+
+if echo "$DS_LIST" | grep -q "customer_a_dataset"; then
+    echo "Detected: Running in Customer A Project!"
+    if [ -z "$PARTNER_PROJECT" ]; then
+        read -p "Enter Data Sharing Partner Project ID: " PARTNER_PROJECT
+    fi
+    echo "Creating customer_a_table view..."
+    bq query --use_legacy_sql=false \
+    "CREATE OR REPLACE VIEW \`${CURRENT_PROJECT}.customer_a_dataset.customer_a_table\` AS
+    SELECT geos.zip_code, geos.city, cust.last_name, cust.first_name
+    FROM \`${CURRENT_PROJECT}.customer_a_dataset.customer_info\` as cust
+    JOIN \`${PARTNER_PROJECT}.demo_dataset.authorized_view_a\` as geos
+    ON geos.zip_code = cust.postal_code;"
+    echo "Task 4 Completed Successfully!"
+    exit 0
+fi
+
+if echo "$DS_LIST" | grep -q "customer_b_dataset"; then
+    echo "Detected: Running in Customer B Project!"
+    if [ -z "$PARTNER_PROJECT" ]; then
+        read -p "Enter Data Sharing Partner Project ID: " PARTNER_PROJECT
+    fi
+    echo "Creating customer_b_table view..."
+    bq query --use_legacy_sql=false \
+    "CREATE OR REPLACE VIEW \`${CURRENT_PROJECT}.customer_b_dataset.customer_b_table\` AS
+    SELECT geos.zip_code, geos.city, cust.last_name, cust.first_name
+    FROM \`${CURRENT_PROJECT}.customer_b_dataset.customer_info\` as cust
+    JOIN \`${PARTNER_PROJECT}.demo_dataset.authorized_view_b\` as geos
+    ON geos.zip_code = cust.postal_code;"
+    echo "Task 5 Completed Successfully!"
+    exit 0
+fi
+
+PARTNER_PROJECT="$CURRENT_PROJECT"
+
+echo "Auto-detecting customer credentials and accounts..."
 
 eval $(python3 -c "
 import subprocess, json, re
@@ -17,8 +57,7 @@ def run(cmd):
     except Exception:
         return ''
 
-partner = run('gcloud config get-value project 2>/dev/null')
-
+partner = '$PARTNER_PROJECT'
 projs_raw = run('gcloud projects list --format=\"value(projectId)\"')
 projs = [p.strip() for p in projs_raw.splitlines() if p.strip().startswith('qwiklabs-gcp-')]
 
@@ -30,25 +69,8 @@ if hash_match:
         if cand not in projs:
             projs.append(cand)
 
-cust_a_proj = ''
-cust_b_proj = ''
-
-for p in projs:
-    if p == partner:
-        continue
-    ds_list = run(f'bq ls --project_id={p} 2>/dev/null')
-    if 'customer_a_dataset' in ds_list:
-        cust_a_proj = p
-    elif 'customer_b_dataset' in ds_list:
-        cust_b_proj = p
-
 other_projs = [p for p in projs if p != partner and p.startswith('qwiklabs-gcp-')]
 other_projs.sort()
-
-if not cust_a_proj and len(other_projs) >= 1:
-    cust_a_proj = other_projs[0]
-if not cust_b_proj and len(other_projs) >= 2:
-    cust_b_proj = other_projs[1]
 
 cust_a_user = ''
 cust_b_user = ''
@@ -72,30 +94,12 @@ for u in sorted(list(all_users)):
     elif 'student-02' in u:
         cust_b_user = u
 
-print(f'AUTO_PARTNER=\"{partner}\"')
-print(f'AUTO_A_PROJ=\"{cust_a_proj}\"')
-print(f'AUTO_B_PROJ=\"{cust_b_proj}\"')
 print(f'AUTO_A_USER=\"{cust_a_user}\"')
 print(f'AUTO_B_USER=\"{cust_b_user}\"')
 ")
 
-PARTNER_PROJECT="${PARTNER_PROJECT:-$AUTO_PARTNER}"
-CUSTOMER_A_PROJECT="${CUSTOMER_A_PROJECT:-$AUTO_A_PROJ}"
-CUSTOMER_B_PROJECT="${CUSTOMER_B_PROJECT:-$AUTO_B_PROJ}"
 CUSTOMER_A_USER="${CUSTOMER_A_USER:-$AUTO_A_USER}"
 CUSTOMER_B_USER="${CUSTOMER_B_USER:-$AUTO_B_USER}"
-
-if [ -z "$PARTNER_PROJECT" ]; then
-    read -p "Enter Data Sharing Partner Project ID: " PARTNER_PROJECT
-fi
-
-if [ -z "$CUSTOMER_A_PROJECT" ]; then
-    read -p "Enter Customer A Project ID: " CUSTOMER_A_PROJECT
-fi
-
-if [ -z "$CUSTOMER_B_PROJECT" ]; then
-    read -p "Enter Customer B Project ID: " CUSTOMER_B_PROJECT
-fi
 
 if [ -z "$CUSTOMER_A_USER" ]; then
     read -p "Enter Customer A Username (email): " CUSTOMER_A_USER
@@ -107,21 +111,15 @@ fi
 
 CUSTOMER_A_USER=$(echo "$CUSTOMER_A_USER" | sed 's/^user://' | xargs)
 CUSTOMER_B_USER=$(echo "$CUSTOMER_B_USER" | sed 's/^user://' | xargs)
-CUSTOMER_A_PROJECT=$(echo "$CUSTOMER_A_PROJECT" | xargs)
-CUSTOMER_B_PROJECT=$(echo "$CUSTOMER_B_PROJECT" | xargs)
-PARTNER_PROJECT=$(echo "$PARTNER_PROJECT" | xargs)
 
 echo "--------------------------------------------------------"
 echo "Configuration Summary:"
 echo " Partner Project ID  : $PARTNER_PROJECT"
 echo " Customer A User     : $CUSTOMER_A_USER"
-echo " Customer A Project  : $CUSTOMER_A_PROJECT"
 echo " Customer B User     : $CUSTOMER_B_USER"
-echo " Customer B Project  : $CUSTOMER_B_PROJECT"
 echo "--------------------------------------------------------"
 
 echo "Task 1: Creating Dataset demo_dataset and Authorized Views A & B..."
-
 bq mk --dataset --location=US ${PARTNER_PROJECT}:demo_dataset 2>/dev/null || true
 
 bq query --use_legacy_sql=false \
@@ -139,40 +137,22 @@ LIMIT 4000;"
 echo "Task 1 completed successfully."
 
 echo "Task 2: Authorizing Views in demo_dataset metadata..."
-
 bq show --format=prettyjson ${PARTNER_PROJECT}:demo_dataset > dataset_temp.json
 
 python3 -c "
 import json
-
 partner_proj = '$PARTNER_PROJECT'
 with open('dataset_temp.json', 'r') as f:
     data = json.load(f)
 
 access = data.get('access', [])
+view_a = {'view': {'projectId': partner_proj, 'datasetId': 'demo_dataset', 'tableId': 'authorized_view_a'}}
+view_b = {'view': {'projectId': partner_proj, 'datasetId': 'demo_dataset', 'tableId': 'authorized_view_b'}}
 
-view_a = {
-    'view': {
-        'projectId': partner_proj,
-        'datasetId': 'demo_dataset',
-        'tableId': 'authorized_view_a'
-    }
-}
-view_b = {
-    'view': {
-        'projectId': partner_proj,
-        'datasetId': 'demo_dataset',
-        'tableId': 'authorized_view_b'
-    }
-}
-
-if view_a not in access:
-    access.append(view_a)
-if view_b not in access:
-    access.append(view_b)
+if view_a not in access: access.append(view_a)
+if view_b not in access: access.append(view_b)
 
 data['access'] = access
-
 with open('dataset_temp.json', 'w') as f:
     json.dump(data, f, indent=2)
 "
@@ -183,7 +163,6 @@ rm -f dataset_temp.json
 echo "Task 2 completed successfully."
 
 echo "Task 3: Granting BigQuery Data Viewer role to Customer A & B users..."
-
 bq query --use_legacy_sql=false \
 "GRANT \`roles/bigquery.dataViewer\`
 ON VIEW \`${PARTNER_PROJECT}.demo_dataset.authorized_view_a\`
@@ -196,51 +175,21 @@ TO 'user:${CUSTOMER_B_USER}';" || true
 
 python3 -c "
 from google.cloud import bigquery
-
 client = bigquery.Client(project='$PARTNER_PROJECT')
-
 def grant(table_id, user_email):
     try:
         t_ref = f'$PARTNER_PROJECT.demo_dataset.{table_id}'
         table = client.get_table(t_ref)
         policy = client.get_iam_policy(table)
-        policy.bindings.append({
-            'role': 'roles/bigquery.dataViewer',
-            'members': [f'user:{user_email}']
-        })
+        policy.bindings.append({'role': 'roles/bigquery.dataViewer', 'members': [f'user:{user_email}']})
         client.set_iam_policy(table, policy)
     except Exception:
         pass
-
 grant('authorized_view_a', '$CUSTOMER_A_USER')
 grant('authorized_view_b', '$CUSTOMER_B_USER')
 "
 
 echo "Task 3 completed successfully."
-
-echo "Task 4: Creating customer_a_table in Customer A Project..."
-
-bq query --use_legacy_sql=false \
-"CREATE OR REPLACE VIEW \`${CUSTOMER_A_PROJECT}.customer_a_dataset.customer_a_table\` AS
-SELECT geos.zip_code, geos.city, cust.last_name, cust.first_name
-FROM \`${CUSTOMER_A_PROJECT}.customer_a_dataset.customer_info\` as cust
-JOIN \`${PARTNER_PROJECT}.demo_dataset.authorized_view_a\` as geos
-ON geos.zip_code = cust.postal_code;" 2>/dev/null || echo "Task 4 query completed."
-
-echo "Task 4 completed successfully."
-
-echo "Task 5: Creating customer_b_table in Customer B Project..."
-
-bq query --use_legacy_sql=false \
-"CREATE OR REPLACE VIEW \`${CUSTOMER_B_PROJECT}.customer_b_dataset.customer_b_table\` AS
-SELECT geos.zip_code, geos.city, cust.last_name, cust.first_name
-FROM \`${CUSTOMER_B_PROJECT}.customer_b_dataset.customer_info\` as cust
-JOIN \`${PARTNER_PROJECT}.demo_dataset.authorized_view_b\` as geos
-ON geos.zip_code = cust.postal_code;" 2>/dev/null || echo "Task 5 query completed."
-
-echo "Task 5 completed successfully."
-
 echo "========================================================"
-echo " All lab tasks completed successfully. "
-echo " You can now verify 'Check my progress' in the lab page. "
+echo " Partner Tasks 1, 2, & 3 Completed Successfully! "
 echo "========================================================"
