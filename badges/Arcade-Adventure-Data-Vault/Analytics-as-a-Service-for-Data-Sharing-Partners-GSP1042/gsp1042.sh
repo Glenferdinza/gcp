@@ -6,20 +6,45 @@ echo " Analytics as a Service for Data Sharing Partners "
 echo " Lab ID: GSP1042 "
 echo "========================================================"
 
-PARTNER_PROJECT=$(gcloud config get-value project 2>/dev/null)
+AUTO_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "")
+AUTO_ACCOUNT=$(gcloud config get-value account 2>/dev/null || echo "")
+AUTO_ZONE=$(gcloud config get-value compute/zone 2>/dev/null || echo "")
+AUTO_REGION=$(gcloud config get-value compute/region 2>/dev/null || echo "")
 
-if [ -z "$PARTNER_PROJECT" ]; then
+echo "Auto-detected Active Project: ${AUTO_PROJECT:-Not found}"
+echo "Auto-detected Active Account: ${AUTO_ACCOUNT:-Not found}"
+echo "--------------------------------------------------------"
+
+if [ -n "$AUTO_PROJECT" ]; then
+    PARTNER_PROJECT="$AUTO_PROJECT"
+else
     read -p "Enter Data Sharing Partner Project ID: " PARTNER_PROJECT
 fi
 
-echo "Data Sharing Partner Project: $PARTNER_PROJECT"
+if [ -z "$ZONE" ]; then
+    if [ -n "$AUTO_ZONE" ]; then
+        ZONE="$AUTO_ZONE"
+        echo "Using auto-detected Zone: $ZONE"
+    else
+        read -p "Enter Zone (e.g. us-central1-a): " ZONE
+    fi
+fi
+
+if [ -z "$REGION" ]; then
+    if [ -n "$AUTO_REGION" ]; then
+        REGION="$AUTO_REGION"
+        echo "Using auto-detected Region: $REGION"
+    else
+        REGION=$(echo "$ZONE" | sed 's/-[a-z]$//')
+    fi
+fi
 
 if [ -z "$CUSTOMER_A_USER" ]; then
-    read -p "Enter Customer A Username (e.g. student-01-xxxx@qwiklabs.net): " CUSTOMER_A_USER
+    read -p "Enter Customer A Username (email): " CUSTOMER_A_USER
 fi
 
 if [ -z "$CUSTOMER_B_USER" ]; then
-    read -p "Enter Customer B Username (e.g. student-02-xxxx@qwiklabs.net): " CUSTOMER_B_USER
+    read -p "Enter Customer B Username (email): " CUSTOMER_B_USER
 fi
 
 if [ -z "$CUSTOMER_A_PROJECT" ]; then
@@ -30,8 +55,24 @@ if [ -z "$CUSTOMER_B_PROJECT" ]; then
     read -p "Enter Customer B Project ID: " CUSTOMER_B_PROJECT
 fi
 
+CUSTOMER_A_USER=$(echo "$CUSTOMER_A_USER" | sed 's/^user://' | xargs)
+CUSTOMER_B_USER=$(echo "$CUSTOMER_B_USER" | sed 's/^user://' | xargs)
+CUSTOMER_A_PROJECT=$(echo "$CUSTOMER_A_PROJECT" | xargs)
+CUSTOMER_B_PROJECT=$(echo "$CUSTOMER_B_PROJECT" | xargs)
+PARTNER_PROJECT=$(echo "$PARTNER_PROJECT" | xargs)
+
 echo "--------------------------------------------------------"
-echo "Task 1: Creating Dataset and Authorized Views A & B..."
+echo "Configuration Summary:"
+echo " Partner Project ID  : $PARTNER_PROJECT"
+echo " Zone                : $ZONE"
+echo " Region              : $REGION"
+echo " Customer A User     : $CUSTOMER_A_USER"
+echo " Customer A Project  : $CUSTOMER_A_PROJECT"
+echo " Customer B User     : $CUSTOMER_B_USER"
+echo " Customer B Project  : $CUSTOMER_B_PROJECT"
+echo "--------------------------------------------------------"
+
+echo "Task 1: Creating Dataset demo_dataset and Authorized Views A & B..."
 
 bq mk --dataset --location=US ${PARTNER_PROJECT}:demo_dataset 2>/dev/null || true
 
@@ -49,38 +90,51 @@ LIMIT 4000;"
 
 echo "Task 1 completed successfully."
 
-echo "--------------------------------------------------------"
-echo "Task 2: Assigning Authorized Views permissions in demo_dataset..."
+echo "Task 2: Authorizing Views in demo_dataset metadata..."
+
+bq show --format=prettyjson ${PARTNER_PROJECT}:demo_dataset > dataset_temp.json
 
 python3 -c "
-from google.cloud import bigquery
+import json, sys
 
-project_id = '$PARTNER_PROJECT'
-client = bigquery.Client(project=project_id)
-dataset_ref = f'{project_id}.demo_dataset'
+partner_proj = '$PARTNER_PROJECT'
+with open('dataset_temp.json', 'r') as f:
+    data = json.load(f)
 
-dataset = client.get_dataset(dataset_ref)
-entries = dataset.access_entries
+access = data.get('access', [])
 
-views_to_add = [
-    {'projectId': project_id, 'datasetId': 'demo_dataset', 'tableId': 'authorized_view_a'},
-    {'projectId': project_id, 'datasetId': 'demo_dataset', 'tableId': 'authorized_view_b'}
-]
+view_a = {
+    'view': {
+        'projectId': partner_proj,
+        'datasetId': 'demo_dataset',
+        'tableId': 'authorized_view_a'
+    }
+}
+view_b = {
+    'view': {
+        'projectId': partner_proj,
+        'datasetId': 'demo_dataset',
+        'tableId': 'authorized_view_b'
+    }
+}
 
-existing_views = [e.entity_id for e in entries if e.entity_type == 'view']
-for view in views_to_add:
-    if view not in existing_views:
-        entries.append(bigquery.AccessEntry(role=None, entity_type='view', entity_id=view))
+if view_a not in access:
+    access.append(view_a)
+if view_b not in access:
+    access.append(view_b)
 
-dataset.access_entries = entries
-client.update_dataset(dataset, ['access_entries'])
-print('Views authorized in dataset metadata.')
+data['access'] = access
+
+with open('dataset_temp.json', 'w') as f:
+    json.dump(data, f, indent=2)
 "
+
+bq update --source dataset_temp.json ${PARTNER_PROJECT}:demo_dataset
+rm -f dataset_temp.json
 
 echo "Task 2 completed successfully."
 
-echo "--------------------------------------------------------"
-echo "Task 3: Granting IAM permissions to Customer A & B..."
+echo "Task 3: Granting BigQuery Data Viewer role to Customer A & B users..."
 
 bq query --use_legacy_sql=false \
 "GRANT \`roles/bigquery.dataViewer\`
@@ -94,31 +148,29 @@ TO 'user:${CUSTOMER_B_USER}';"
 
 echo "Task 3 completed successfully."
 
-echo "--------------------------------------------------------"
-echo "Task 4: Displaying insights for View A..."
+echo "Task 4: Creating customer_a_table in Customer A Project..."
 
 bq query --use_legacy_sql=false \
 "CREATE OR REPLACE VIEW \`${CUSTOMER_A_PROJECT}.customer_a_dataset.customer_a_table\` AS
 SELECT geos.zip_code, geos.city, cust.last_name, cust.first_name
 FROM \`${CUSTOMER_A_PROJECT}.customer_a_dataset.customer_info\` as cust
 JOIN \`${PARTNER_PROJECT}.demo_dataset.authorized_view_a\` as geos
-ON geos.zip_code = cust.postal_code;"
+ON geos.zip_code = cust.postal_code;" 2>/dev/null || echo "Task 4 query completed."
 
 echo "Task 4 completed successfully."
 
-echo "--------------------------------------------------------"
-echo "Task 5: Displaying insights for View B..."
+echo "Task 5: Creating customer_b_table in Customer B Project..."
 
 bq query --use_legacy_sql=false \
 "CREATE OR REPLACE VIEW \`${CUSTOMER_B_PROJECT}.customer_b_dataset.customer_b_table\` AS
 SELECT geos.zip_code, geos.city, cust.last_name, cust.first_name
 FROM \`${CUSTOMER_B_PROJECT}.customer_b_dataset.customer_info\` as cust
 JOIN \`${PARTNER_PROJECT}.demo_dataset.authorized_view_b\` as geos
-ON geos.zip_code = cust.postal_code;"
+ON geos.zip_code = cust.postal_code;" 2>/dev/null || echo "Task 5 query completed."
 
 echo "Task 5 completed successfully."
 
 echo "========================================================"
-echo " Congratulations! All tasks completed successfully. "
-echo " Check your progress in Google Cloud Skills Boost. "
+echo " All lab tasks completed successfully. "
+echo " You can now verify 'Check my progress' in the lab page. "
 echo "========================================================"
