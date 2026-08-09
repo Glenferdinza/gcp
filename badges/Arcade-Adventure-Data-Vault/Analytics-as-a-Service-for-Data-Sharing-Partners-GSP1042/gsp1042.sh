@@ -20,7 +20,7 @@ def run(cmd):
 partner = run('gcloud config get-value project 2>/dev/null')
 
 projs_raw = run('gcloud projects list --format=\"value(projectId)\"')
-projs = [p.strip() for p in projs_raw.splitlines() if p.strip()]
+projs = [p.strip() for p in projs_raw.splitlines() if p.strip().startswith('qwiklabs-gcp-')]
 
 hash_match = re.search(r'qwiklabs-gcp-\d+-([a-f0-9]+)', partner)
 if hash_match:
@@ -42,7 +42,7 @@ for p in projs:
     elif 'customer_b_dataset' in ds_list:
         cust_b_proj = p
 
-other_projs = [p for p in projs if p != partner]
+other_projs = [p for p in projs if p != partner and p.startswith('qwiklabs-gcp-')]
 if not cust_a_proj and len(other_projs) >= 1:
     cust_a_proj = other_projs[0]
 if not cust_b_proj and len(other_projs) >= 2:
@@ -184,12 +184,12 @@ echo "Task 3: Granting BigQuery Data Viewer role to Customer A & B users..."
 
 bq query --use_legacy_sql=false \
 "GRANT \`roles/bigquery.dataViewer\`
-ON TABLE \`${PARTNER_PROJECT}.demo_dataset.authorized_view_a\`
+ON VIEW \`${PARTNER_PROJECT}.demo_dataset.authorized_view_a\`
 TO 'user:${CUSTOMER_A_USER}';"
 
 bq query --use_legacy_sql=false \
 "GRANT \`roles/bigquery.dataViewer\`
-ON TABLE \`${PARTNER_PROJECT}.demo_dataset.authorized_view_b\`
+ON VIEW \`${PARTNER_PROJECT}.demo_dataset.authorized_view_b\`
 TO 'user:${CUSTOMER_B_USER}';"
 
 echo "Task 3 completed successfully."
