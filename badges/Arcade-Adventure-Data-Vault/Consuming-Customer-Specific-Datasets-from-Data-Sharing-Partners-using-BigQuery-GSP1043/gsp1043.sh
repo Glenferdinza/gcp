@@ -76,7 +76,6 @@ if echo "$DS_LIST" | grep -q "customer_dataset"; then
     exit 0
 fi
 
-# Default: Partner Project execution
 PARTNER_PROJECT="$CURRENT_PROJECT"
 
 echo "Auto-detecting project credentials and accounts..."
@@ -97,25 +96,23 @@ projs = [p.strip() for p in projs_raw.splitlines() if p.strip().startswith('qwik
 hash_match = re.search(r'qwiklabs-gcp-\d+-([a-f0-9]+)', partner)
 if hash_match:
     h = hash_match.group(1)
-    for idx in ['00', '01', '02', '03']:
+    for idx in ['00', '01', '02', '03', '04']:
         cand = f'qwiklabs-gcp-{idx}-{h}'
         if cand not in projs:
             projs.append(cand)
 
+other_projs = [p for p in projs if p != partner and p.startswith('qwiklabs-gcp-')]
+other_projs.sort()
+
 pub_proj = ''
 cust_proj = ''
 
-for p in projs:
-    if p == partner:
-        continue
+for p in other_projs:
     ds_list = run(f'bq ls --project_id={p} 2>/dev/null')
     if 'data_publisher_dataset' in ds_list:
         pub_proj = p
     elif 'customer_dataset' in ds_list:
         cust_proj = p
-
-other_projs = [p for p in projs if p != partner and p.startswith('qwiklabs-gcp-')]
-other_projs.sort()
 
 if not pub_proj and len(other_projs) >= 1:
     pub_proj = other_projs[0]
@@ -138,11 +135,15 @@ for p in [partner] + other_projs:
         except Exception:
             pass
 
-for u in sorted(list(all_users)):
-    if 'student-01' in u:
-        pub_user = u
-    elif 'student-02' in u:
-        cust_user = u
+user_list = sorted(list(all_users))
+partner_user = run('gcloud config get-value account 2>/dev/null')
+
+non_partner_users = [u for u in user_list if u != partner_user]
+
+if len(non_partner_users) >= 1:
+    pub_user = non_partner_users[0]
+if len(non_partner_users) >= 2:
+    cust_user = non_partner_users[1]
 
 print(f'AUTO_PUB_PROJ=\"{pub_proj}\"')
 print(f'AUTO_CUST_PROJ=\"{cust_proj}\"')
@@ -155,14 +156,6 @@ CUSTOMER_PROJECT="${CUSTOMER_PROJECT:-$AUTO_CUST_PROJ}"
 PUBLISHER_USER="${PUBLISHER_USER:-$AUTO_PUB_USER}"
 CUSTOMER_USER="${CUSTOMER_USER:-$AUTO_CUST_USER}"
 
-if [ -z "$PUBLISHER_PROJECT" ]; then
-    read -p "Enter Data Publisher Project ID: " PUBLISHER_PROJECT
-fi
-
-if [ -z "$CUSTOMER_PROJECT" ]; then
-    read -p "Enter Customer Project ID: " CUSTOMER_PROJECT
-fi
-
 if [ -z "$PUBLISHER_USER" ]; then
     read -p "Enter Data Publisher Username (email): " PUBLISHER_USER
 fi
@@ -173,9 +166,6 @@ fi
 
 PUBLISHER_USER=$(echo "$PUBLISHER_USER" | sed 's/^user://' | xargs)
 CUSTOMER_USER=$(echo "$CUSTOMER_USER" | sed 's/^user://' | xargs)
-PUBLISHER_PROJECT=$(echo "$PUBLISHER_PROJECT" | xargs)
-CUSTOMER_PROJECT=$(echo "$CUSTOMER_PROJECT" | xargs)
-PARTNER_PROJECT=$(echo "$PARTNER_PROJECT" | xargs)
 
 echo "--------------------------------------------------------"
 echo "Configuration Summary:"
@@ -187,7 +177,6 @@ echo " Customer User        : $CUSTOMER_USER"
 echo "--------------------------------------------------------"
 
 echo "Task 1: Creating Dataset demo_dataset and Destination Table authorized_table..."
-
 bq mk --dataset --location=US ${PARTNER_PROJECT}:demo_dataset 2>/dev/null || true
 
 bq query --use_legacy_sql=false \
@@ -199,7 +188,6 @@ WHERE cities_by_area <= 10 ORDER BY cities.state_code
 LIMIT 1000;"
 
 echo "Task 1: Authorizing Dataset demo_dataset metadata..."
-
 bq show --format=prettyjson ${PARTNER_PROJECT}:demo_dataset > dataset_temp.json
 
 python3 -c "
@@ -223,7 +211,6 @@ bq update --source dataset_temp.json ${PARTNER_PROJECT}:demo_dataset
 rm -f dataset_temp.json
 
 echo "Task 1: Granting BigQuery Data Viewer permissions to Data Publisher and Customer..."
-
 bq query --use_legacy_sql=false \
 "GRANT \`roles/bigquery.dataViewer\`
 ON TABLE \`${PARTNER_PROJECT}.demo_dataset.authorized_table\`
@@ -248,30 +235,7 @@ grant('authorized_table', ['$PUBLISHER_USER', '$CUSTOMER_USER'])
 
 echo "Task 1 completed successfully."
 
-echo "Task 2: Creating authorized_view in Data Publisher Project..."
-
-bq query --use_legacy_sql=false --project_id="$PUBLISHER_PROJECT" \
-"CREATE OR REPLACE VIEW \`${PUBLISHER_PROJECT}.data_publisher_dataset.authorized_view\` AS
-SELECT *
-FROM \`${PARTNER_PROJECT}.demo_dataset.authorized_table\`
-WHERE state_code='NY'
-LIMIT 1000;" 2>/dev/null || echo "Task 2 view query submitted."
-
-echo "Task 2 completed successfully."
-
-echo "Task 3: Creating customer_table in Customer Project..."
-
-bq query --use_legacy_sql=false --project_id="$CUSTOMER_PROJECT" \
-"CREATE OR REPLACE VIEW \`${CUSTOMER_PROJECT}.customer_dataset.customer_table\` AS
-SELECT cities.zip_code, cities.city, cities.state_code, customers.last_name, customers.first_name
-FROM \`${CUSTOMER_PROJECT}.customer_dataset.customer_info\` as customers
-JOIN \`${PUBLISHER_PROJECT}.data_publisher_dataset.authorized_view\` as cities
-ON cities.state_code = customers.state;" 2>/dev/null || echo "Task 3 query submitted."
-
-echo "Task 3 completed successfully."
-
 echo "Task 4: Inserting new row into Data Sharing Partner authorized_table..."
-
 bq query --use_legacy_sql=false \
 "INSERT INTO \`${PARTNER_PROJECT}.demo_dataset.authorized_table\` (
   zip_code, city, county, state_fips_code, state_code, state_name,
@@ -284,6 +248,5 @@ VALUES (
 echo "Task 4 completed successfully."
 
 echo "========================================================"
-echo " All lab tasks completed successfully. "
-echo " You can now verify 'Check my progress' in the lab page. "
+echo " Partner Project Tasks 1 & 4 Completed Successfully! "
 echo "========================================================"
