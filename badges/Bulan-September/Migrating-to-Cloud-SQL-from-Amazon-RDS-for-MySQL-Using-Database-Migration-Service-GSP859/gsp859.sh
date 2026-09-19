@@ -23,8 +23,11 @@ if [ -z "$CURRENT_PROJECT" ]; then
 fi
 
 # Enable required Google Cloud APIs
-echo -e "\n${YELLOW}Enabling necessary GCP APIs (Database Migration & Cloud SQL Admin)...${NC}"
-gcloud services enable datamigration.googleapis.com sqladmin.googleapis.com compute.googleapis.com --quiet
+echo -e "\n${YELLOW}Enabling necessary GCP APIs (Database Migration, Service Networking & Cloud SQL Admin)...${NC}"
+gcloud services enable datamigration.googleapis.com servicenetworking.googleapis.com sqladmin.googleapis.com compute.googleapis.com --quiet || true
+
+# Initialize Service Identity for DMS if not already created
+gcloud beta services identity create --service=datamigration.googleapis.com --project="$CURRENT_PROJECT" 2>/dev/null || true
 
 # Detect Cloud SQL Instance Region and Public IP
 echo -e "\n${YELLOW}Detecting Cloud SQL 'mysql-cloudsql' configuration...${NC}"
@@ -120,19 +123,40 @@ echo -e "\n${CYAN}--------------------------------------------------------${NC}"
 echo -e "${CYAN} Task 2: Create Source Connection Profile in DMS        ${NC}"
 echo -e "${CYAN}--------------------------------------------------------${NC}"
 
+PROFILE_EXISTS=false
 if gcloud database-migration connection-profiles describe mysql-rds-source --region="$REGION" &>/dev/null; then
     echo -e "${GREEN}Connection Profile 'mysql-rds-source' already exists.${NC}"
+    PROFILE_EXISTS=true
 else
-    echo "Creating connection profile 'mysql-rds-source'..."
-    gcloud database-migration connection-profiles create mysql mysql-rds-source \
+    echo "Attempting to create connection profile 'mysql-rds-source' via CLI..."
+    if gcloud database-migration connection-profiles create mysql mysql-rds-source \
         --region="$REGION" \
         --display-name="mysql-rds-source" \
         --host="$RDS_IP" \
         --port=3306 \
         --username="admin" \
         --password="changeme" \
-        --no-async
-    echo -e "${GREEN}Connection Profile 'mysql-rds-source' created successfully!${NC}"
+        --no-async 2>/dev/null; then
+        echo -e "${GREEN}Connection Profile 'mysql-rds-source' created successfully via CLI!${NC}"
+        PROFILE_EXISTS=true
+    else
+        echo -e "${YELLOW}Notice: DMS tenant project needs initial activation from Google Cloud Console.${NC}"
+        echo -e "Please create the profile directly in the Console wizard:"
+        echo -e "  1. In Console, go to: ${CYAN}Database Migration -> Migration jobs -> Create migration job${NC}"
+        echo -e "     Job Name: ${GREEN}rds-to-cloudsql${NC} | Engine: ${GREEN}Amazon RDS for MySQL${NC} | Region: ${GREEN}$REGION${NC} | Type: ${GREEN}One-time${NC}"
+        echo -e "     Click ${GREEN}Save & continue${NC}"
+        echo -e "  2. Under 'Define a source', click ${CYAN}Create a connection profile${NC} and fill:"
+        echo -e "     - Connection profile name : ${GREEN}mysql-rds-source${NC}"
+        echo -e "     - Hostname or IP address  : ${GREEN}$RDS_IP${NC}"
+        echo -e "     - Port                    : ${GREEN}3306${NC}"
+        echo -e "     - Username                : ${GREEN}admin${NC}"
+        echo -e "     - Password                : ${GREEN}changeme${NC}"
+        echo -e "     - Region                  : ${GREEN}$REGION${NC}"
+        echo -e "     - Encryption type         : ${GREEN}None${NC}"
+        echo -e "     Click ${GREEN}Create${NC}, then click ${GREEN}Save & continue${NC}."
+        echo -e "--------------------------------------------------------"
+        read -p "Press [ENTER] after creating 'mysql-rds-source' in Console to continue..."
+    fi
 fi
 
 echo -e "\n${GREEN}>> Checkpoint 1 (Create connection profile for MySQL source instance) is READY to be verified on Skills Boost! <<${NC}"
