@@ -10,6 +10,9 @@ Repository ini berisi script otomatisasi untuk menyelesaikan lab Google Cloud Sk
 - [Analytics as a Service for Data Sharing Partners || GSP1042 ||](badges/Arcade-Adventure-Data-Vault/Analytics-as-a-Service-for-Data-Sharing-Partners-GSP1042/README.md)
 - [Consuming Customer Specific Datasets from Data Sharing Partners using BigQuery || GSP1043 ||](badges/Arcade-Adventure-Data-Vault/Consuming-Customer-Specific-Datasets-from-Data-Sharing-Partners-using-BigQuery-GSP1043/README.md)
 
+### Bulan September
+- [Migrating to Cloud SQL from Amazon RDS for MySQL Using Database Migration Service || GSP859 ||](badges/Bulan-September/Migrating-to-Cloud-SQL-from-Amazon-RDS-for-MySQL-Using-Database-Migration-Service-GSP859/README.md)
+
 ---
 
 ## Usage Instructions
